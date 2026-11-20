@@ -1,0 +1,8 @@
+# 設定ファイルとAPIキーは絶対にコミットしない
+config.toml
+api_key.txt
+*.key
+.env
+
+__pycache__/
+*.pyc

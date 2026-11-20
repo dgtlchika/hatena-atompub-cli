@@ -1,0 +1,20 @@
+# hatena-atompub-cli 設定サンプル
+#
+# このファイルを ~/.config/hatena-cli/config.toml にコピーして編集してください。
+#   mkdir -p ~/.config/hatena-cli
+#   cp config.example.toml ~/.config/hatena-cli/config.toml
+#
+# 環境変数 HATENA_ID / HATENA_BLOG_ID / HATENA_API_KEY / HATENA_API_KEY_FILE が
+# 設定されている場合は、そちらが優先されます。
+
+# あなたのはてなID（例: "your-hatena-id"）
+hatena_id = "your-hatena-id"
+
+# ブログのドメイン（AtomPub のエンドポイントで使う識別子）
+# 例: "your-blog.hatenablog.com" / 独自ドメインの場合はそのドメイン
+blog_id = "your-blog.hatenablog.com"
+
+# APIキーを保存したファイルのパス（~ 展開可）
+# キーファイルには APIキーだけを1行で書いてください。chmod 600 を推奨します。
+# 環境変数 HATENA_API_KEY が設定されている場合はそちらが優先されます。
+api_key_file = "~/.config/hatena-cli/api_key.txt"
