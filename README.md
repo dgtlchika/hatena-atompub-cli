@@ -133,7 +133,9 @@ MIT License（[LICENSE](LICENSE) 参照）
 
 このツールは「デジタル地下室」が、自分のブログ運用で実際に困ったことを解消するために作ったものです。同じ困りごとの解説や、作った過程は note に書いています。
 
-- note（デジタル地下室）: https://note.com/sumaho_lab
+- note（デジタル地下室・記事目次）: https://note.com/sumaho_lab/n/n96ded41773ed
+- BOOTH（デジタル地下室）: https://digital-basement.booth.pm/
+- はてなブログ: https://dgtlchika.hatenablog.com/
 - X: https://x.com/dgtl_chika
 - GitHub: https://github.com/dgtlchika
 
