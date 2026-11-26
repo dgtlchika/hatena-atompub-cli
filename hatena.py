@@ -49,6 +49,9 @@ DEFAULT_CONFIG_PATH = Path("~/.config/hatena-cli/config.toml").expanduser()
 DEFAULT_KEY_PATH = Path("~/.config/hatena-cli/api_key.txt").expanduser()
 
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+APP_NS = {"app": "http://www.w3.org/2007/app"}
+FEED_NS = {**ATOM_NS, **APP_NS}
+HATENA_NS = {"hatena": "http://www.hatena.ne.jp/info/xmlns#"}
 
 
 class ConfigError(Exception):
@@ -132,6 +135,15 @@ def http_request(req: urllib.request.Request) -> tuple[int, dict, bytes]:
 
 # ---------------------------------------------------------------- blog entries
 
+def extract_entry_id(entry: ET.Element) -> str:
+    """エントリ要素から entry_id (edit リンクの末尾) を取り出す。無ければ空文字。"""
+    for link in entry.findall("atom:link", ATOM_NS):
+        if link.get("rel") == "edit":
+            href = link.get("href") or ""
+            return href.rstrip("/").rsplit("/", 1)[-1]
+    return ""
+
+
 def list_entries(cfg: Config) -> int:
     req = urllib.request.Request(f"{cfg.blog_base}/entry", headers=wsse_headers(cfg))
     _, _, body = http_request(req)
@@ -140,7 +152,11 @@ def list_entries(cfg: Config) -> int:
     print(f"entries: {len(entries)}")
     for entry in entries:
         title = entry.findtext("atom:title", default="", namespaces=ATOM_NS)
-        print(f"- {title}")
+        entry_id = extract_entry_id(entry)
+        draft = entry.findtext("app:control/app:draft", default="", namespaces=FEED_NS)
+        status = "draft" if draft == "yes" else "published"
+        updated = entry.findtext("atom:updated", default="", namespaces=ATOM_NS)
+        print(f"- {title} (entry_id: {entry_id}, status: {status}, updated: {updated})")
     return 0
 
 
@@ -168,7 +184,7 @@ def print_entry_result(status: int, body: bytes) -> None:
         if rel == "alternate":
             print(f"url: {href}")
         elif rel == "edit":
-            print(f"entry_id: {href.rstrip('/').rsplit('/', 1)[-1]}")
+            print(f"entry_id: {extract_entry_id(root)}")
 
 
 def post_entry(
