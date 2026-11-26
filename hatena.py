@@ -34,7 +34,6 @@ import base64
 import hashlib
 import mimetypes
 import os
-import re
 import sys
 import tomllib
 import urllib.error
@@ -283,16 +282,28 @@ def upload_image(
         FOTOLIFE_POST_URI, data=entry_xml, headers=headers, method="POST"
     )
     status, resp_headers, body = http_request(req)
-    text = body.decode("utf-8", errors="replace")
-    url_match = re.search(r"<hatena:imageurl>([^<]+)</hatena:imageurl>", text)
-    syntax_match = re.search(r"<hatena:syntax>([^<]+)</hatena:syntax>", text)
-    if status != 201 or not url_match or not syntax_match:
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        root = None
+    imageurl = (
+        root.findtext("hatena:imageurl", namespaces=HATENA_NS)
+        if root is not None
+        else None
+    )
+    syntax = (
+        root.findtext("hatena:syntax", namespaces=HATENA_NS)
+        if root is not None
+        else None
+    )
+    if status != 201 or not imageurl or not syntax:
+        text = body.decode("utf-8", errors="replace")
         print(f"error: フォトライフの応答を解釈できませんでした (status {status})", file=sys.stderr)
         print(text[:500], file=sys.stderr)
         raise SystemExit(1)
     return {
-        "imageurl": url_match.group(1),
-        "syntax": f"[{syntax_match.group(1)}]",
+        "imageurl": imageurl,
+        "syntax": f"[{syntax}]",
         "edit_uri": resp_headers.get("Location", ""),
     }
 
