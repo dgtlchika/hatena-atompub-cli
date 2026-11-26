@@ -34,7 +34,6 @@ import base64
 import hashlib
 import mimetypes
 import os
-import re
 import sys
 import tomllib
 import urllib.error
@@ -49,6 +48,9 @@ DEFAULT_CONFIG_PATH = Path("~/.config/hatena-cli/config.toml").expanduser()
 DEFAULT_KEY_PATH = Path("~/.config/hatena-cli/api_key.txt").expanduser()
 
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+APP_NS = {"app": "http://www.w3.org/2007/app"}
+FEED_NS = {**ATOM_NS, **APP_NS}
+HATENA_NS = {"hatena": "http://www.hatena.ne.jp/info/xmlns#"}
 
 
 class ConfigError(Exception):
@@ -132,6 +134,15 @@ def http_request(req: urllib.request.Request) -> tuple[int, dict, bytes]:
 
 # ---------------------------------------------------------------- blog entries
 
+def extract_entry_id(entry: ET.Element) -> str:
+    """エントリ要素から entry_id (edit リンクの末尾) を取り出す。無ければ空文字。"""
+    for link in entry.findall("atom:link", ATOM_NS):
+        if link.get("rel") == "edit":
+            href = link.get("href") or ""
+            return href.rstrip("/").rsplit("/", 1)[-1]
+    return ""
+
+
 def list_entries(cfg: Config) -> int:
     req = urllib.request.Request(f"{cfg.blog_base}/entry", headers=wsse_headers(cfg))
     _, _, body = http_request(req)
@@ -140,7 +151,11 @@ def list_entries(cfg: Config) -> int:
     print(f"entries: {len(entries)}")
     for entry in entries:
         title = entry.findtext("atom:title", default="", namespaces=ATOM_NS)
-        print(f"- {title}")
+        entry_id = extract_entry_id(entry)
+        draft = entry.findtext("app:control/app:draft", default="", namespaces=FEED_NS)
+        status = "draft" if draft == "yes" else "published"
+        updated = entry.findtext("atom:updated", default="", namespaces=ATOM_NS)
+        print(f"- {title} (entry_id: {entry_id}, status: {status}, updated: {updated})")
     return 0
 
 
@@ -168,7 +183,7 @@ def print_entry_result(status: int, body: bytes) -> None:
         if rel == "alternate":
             print(f"url: {href}")
         elif rel == "edit":
-            print(f"entry_id: {href.rstrip('/').rsplit('/', 1)[-1]}")
+            print(f"entry_id: {extract_entry_id(root)}")
 
 
 def post_entry(
@@ -267,16 +282,28 @@ def upload_image(
         FOTOLIFE_POST_URI, data=entry_xml, headers=headers, method="POST"
     )
     status, resp_headers, body = http_request(req)
-    text = body.decode("utf-8", errors="replace")
-    url_match = re.search(r"<hatena:imageurl>([^<]+)</hatena:imageurl>", text)
-    syntax_match = re.search(r"<hatena:syntax>([^<]+)</hatena:syntax>", text)
-    if status != 201 or not url_match or not syntax_match:
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        root = None
+    imageurl = (
+        root.findtext("hatena:imageurl", namespaces=HATENA_NS)
+        if root is not None
+        else None
+    )
+    syntax = (
+        root.findtext("hatena:syntax", namespaces=HATENA_NS)
+        if root is not None
+        else None
+    )
+    if status != 201 or not imageurl or not syntax:
+        text = body.decode("utf-8", errors="replace")
         print(f"error: フォトライフの応答を解釈できませんでした (status {status})", file=sys.stderr)
         print(text[:500], file=sys.stderr)
         raise SystemExit(1)
     return {
-        "imageurl": url_match.group(1),
-        "syntax": f"[{syntax_match.group(1)}]",
+        "imageurl": imageurl,
+        "syntax": f"[{syntax}]",
         "edit_uri": resp_headers.get("Location", ""),
     }
 
