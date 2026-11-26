@@ -5,7 +5,7 @@
 
 ## できること
 
-- 記事の一覧表示・投稿（下書き／公開）・更新・削除
+- 記事の一覧表示・投稿（下書き／公開／予約）・更新・削除
 - 投稿形式はプレーンテキスト / HTML / Markdown に対応
 - **画像付き投稿**: 画像をはてなフォトライフへアップロードし、本文へ自動で埋め込んでから投稿できます
   - はてなブログの AtomPub 単体では画像を送れないため、管理画面でフォトライフへ手作業アップロード→記法をコピペ、という手順になりがちです。この CLI はフォトライフ AtomAPI を併用して、その往復をなくします
@@ -76,6 +76,9 @@ python3 hatena.py post     "タイトル" body.txt
 python3 hatena.py posthtml "タイトル" body.html
 python3 hatena.py postmd   "タイトル" body.md
 
+# 予約投稿（下書きとして登録され、指定した時刻に公開される）
+python3 hatena.py posthtml "タイトル" body.html --schedule 2026-11-28T07:00:00+09:00
+
 # 記事の更新（--type は html / text / markdown、既定は html）
 python3 hatena.py update <entry_id> "タイトル" body.html
 
@@ -111,6 +114,19 @@ python3 hatena.py posthtml "旅行記" body.html --image photo1.jpg --image phot
 
 対応画像形式は JPEG / PNG / GIF です。
 
+### 予約投稿
+
+`--schedule` に ISO 8601 形式で未来の日時を指定すると、記事を「予約投稿」として登録できます。記事はいったん下書きとして保存され、指定した時刻になると自動で公開されます。
+
+```bash
+python3 hatena.py posthtml "タイトル" body.html --schedule 2026-11-28T07:00:00+09:00
+```
+
+- 対象は `draft` / `post` / `posthtml` / `postmd` の各投稿コマンドと `update` です（`update` では既存の下書きへ予約を設定したり、公開時刻を変更したりできます）
+- 日時は `2026-11-28T07:00:00+09:00` のようにタイムゾーン付きで指定するのが確実です。過去の日時や解釈できない形式は、送信前にエラーになります
+- 仕組み: 投稿 XML の `app:control` に `app:draft=yes` と `hatenablog:scheduled=yes` を入れ、`updated` 要素に公開予定時刻を指定します（はてなブログAtomPub の公式仕様。予約投稿は下書き状態の記事でのみ有効です）
+- 予約の取り消し方法は公式ドキュメントに明記されていないため、取り消しはブログの管理画面から行うのが確実です
+
 ## セキュリティ上の注意
 
 - **APIキーは絶対にリポジトリへコミットしないでください。** このリポジトリの `.gitignore` には `config.toml` と `api_key.txt` を入れてありますが、各自の環境でも十分に注意してください
@@ -120,6 +136,7 @@ python3 hatena.py posthtml "旅行記" body.html --image photo1.jpg --image phot
 ## 仕様メモ
 
 - ブログ側: [はてなブログAtomPub](https://developer.hatena.ne.jp/ja/documents/blog/apis/atom)（WSSE 認証）
+- 予約投稿: 投稿・更新の XML で `app:control/hatenablog:scheduled` 要素と `updated` 要素を使います（同ドキュメント。2026年2月に仕様追加）
 - 画像側: [はてなフォトライフAtomAPI](https://developer.hatena.ne.jp/ja/documents/fotolife/apis/atom) の PostURI（`https://f.hatena.ne.jp/atom/post`）へ、画像を Base64 化して Atom エントリで POST します。レスポンスの `hatena:imageurl` と `hatena:syntax` を使って本文へ埋め込みます
 - フォトライフ側のフォルダは `--folder` で指定できます（存在しないフォルダは自動作成されます）
 

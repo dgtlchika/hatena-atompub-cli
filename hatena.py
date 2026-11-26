@@ -7,11 +7,11 @@
 
 Usage:
   hatena.py list
-  hatena.py draft    <title> <body_file> [--image FILE ...]
-  hatena.py post     <title> <body_file> [--image FILE ...]
-  hatena.py posthtml <title> <body_file> [--image FILE ...]
-  hatena.py postmd   <title> <body_file> [--image FILE ...]
-  hatena.py update   <entry_id> <title> <body_file> [--type html|text|markdown] [--image FILE ...]
+  hatena.py draft    <title> <body_file> [--image FILE ...] [--schedule ISO8601]
+  hatena.py post     <title> <body_file> [--image FILE ...] [--schedule ISO8601]
+  hatena.py posthtml <title> <body_file> [--image FILE ...] [--schedule ISO8601]
+  hatena.py postmd   <title> <body_file> [--image FILE ...] [--schedule ISO8601]
+  hatena.py update   <entry_id> <title> <body_file> [--type html|text|markdown] [--image FILE ...] [--schedule ISO8601]
   hatena.py delete   <entry_id>
   hatena.py upload   <image_file> [--folder NAME] [--title TITLE]
 
@@ -28,6 +28,12 @@ API キーがコマンドライン引数や出力に現れることはありま�
   埋め込まれ、プレースホルダが無い画像は本文の末尾に追加されます。
   HTML 形式では <img> タグ、それ以外では [f:id:...:image] 記法で
   埋め込まれます。
+
+予約投稿:
+  post 系コマンドと update に --schedule 2026-11-28T07:00:00+09:00 の
+  ように ISO 8601 の未来日時を付けると、記事は下書きとして登録され、
+  指定した時刻に公開されます (hatenablog:scheduled 要素 + updated 要素。
+  はてなブログAtomPub 公式仕様)。
 """
 import argparse
 import base64
@@ -51,6 +57,7 @@ ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 APP_NS = {"app": "http://www.w3.org/2007/app"}
 FEED_NS = {**ATOM_NS, **APP_NS}
 HATENA_NS = {"hatena": "http://www.hatena.ne.jp/info/xmlns#"}
+HATENABLOG_NS_URI = "http://www.hatena.ne.jp/info/xmlns#hatenablog"
 
 
 class ConfigError(Exception):
@@ -159,17 +166,61 @@ def list_entries(cfg: Config) -> int:
     return 0
 
 
-def build_entry_xml(title: str, content: str, draft: bool, content_type: str) -> bytes:
-    draft_xml = (
-        "<app:control><app:draft>yes</app:draft></app:control>" if draft else ""
-    )
+def parse_schedule_time(value: str) -> str:
+    """予約投稿の時刻 (ISO 8601) を検証し、正規化した文字列を返す。
+
+    予約投稿が有効なのは未来の日時を指定した場合のみ (公式仕様)。
+    タイムゾーンオフセットが無い場合は、実行環境のローカルタイム
+    ゾーンの時刻として解釈する。
+    """
+    text = value.strip()
+    candidate = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        raise ValueError(
+            f"予約時刻の形式が不正です (ISO 8601 で指定してください): {value}"
+        ) from None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    if dt <= datetime.now(dt.tzinfo):
+        raise ValueError(f"予約時刻には未来の日時を指定してください: {value}")
+    return dt.isoformat()
+
+
+def build_entry_xml(
+    title: str,
+    content: str,
+    draft: bool,
+    content_type: str,
+    scheduled: str | None = None,
+) -> bytes:
+    hatenablog_attr = ""
+    updated_xml = ""
+    if scheduled is not None:
+        # 予約投稿: 下書き (app:draft=yes) + hatenablog:scheduled=yes とし、
+        # updated 要素で公開予定時刻を指定する (はてなブログAtomPub 公式仕様)。
+        # 下書きではない記事への scheduled 指定は無効とされるため、
+        # scheduled 指定時は常に下書きとして送信する。
+        hatenablog_attr = f' xmlns:hatenablog="{HATENABLOG_NS_URI}"'
+        updated_xml = f"<updated>{escape(scheduled)}</updated>"
+        control_xml = (
+            "<app:control><app:draft>yes</app:draft>"
+            "<hatenablog:scheduled>yes</hatenablog:scheduled></app:control>"
+        )
+    elif draft:
+        control_xml = "<app:control><app:draft>yes</app:draft></app:control>"
+    else:
+        control_xml = ""
     return (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<entry xmlns="http://www.w3.org/2005/Atom" '
-        'xmlns:app="http://www.w3.org/2007/app">'
+        'xmlns:app="http://www.w3.org/2007/app"'
+        f"{hatenablog_attr}>"
         f"<title>{escape(title)}</title>"
         f'<content type="{content_type}">{escape(content)}</content>'
-        f"{draft_xml}"
+        f"{updated_xml}"
+        f"{control_xml}"
         "</entry>"
     ).encode("utf-8")
 
@@ -193,10 +244,11 @@ def post_entry(
     draft: bool,
     content_type: str,
     image_files: list[str],
+    schedule: str | None = None,
 ) -> int:
     content = Path(body_file).read_text(encoding="utf-8")
     content = embed_images(cfg, content, image_files, content_type)
-    entry_xml = build_entry_xml(title, content, draft, content_type)
+    entry_xml = build_entry_xml(title, content, draft, content_type, scheduled=schedule)
     headers = wsse_headers(cfg)
     headers["Content-Type"] = "application/atom+xml;type=entry"
     req = urllib.request.Request(
@@ -204,6 +256,8 @@ def post_entry(
     )
     status, _, body = http_request(req)
     print_entry_result(status, body)
+    if schedule is not None:
+        print(f"scheduled: {schedule}")
     return 0
 
 
@@ -214,10 +268,13 @@ def update_entry(
     body_file: str,
     content_type: str,
     image_files: list[str],
+    schedule: str | None = None,
 ) -> int:
     content = Path(body_file).read_text(encoding="utf-8")
     content = embed_images(cfg, content, image_files, content_type)
-    entry_xml = build_entry_xml(title, content, False, content_type)
+    entry_xml = build_entry_xml(
+        title, content, False, content_type, scheduled=schedule
+    )
     headers = wsse_headers(cfg)
     headers["Content-Type"] = "application/atom+xml;type=entry"
     req = urllib.request.Request(
@@ -225,6 +282,8 @@ def update_entry(
     )
     status, _, _ = http_request(req)
     print(f"status: {status}")
+    if schedule is not None:
+        print(f"scheduled: {schedule}")
     return 0
 
 
@@ -366,6 +425,9 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("body_file")
         p.add_argument("--image", action="append", default=[], metavar="FILE",
                        help="本文に埋め込む画像 (複数指定可)")
+        p.add_argument("--schedule", metavar="ISO8601", default=None,
+                       help="予約投稿の公開時刻 (ISO 8601、未来の日時)。"
+                            "下書きとして登録され、指定時刻に公開される")
         p.set_defaults(content_type=ctype, draft=draft)
 
     p_update = sub.add_parser("update", help="記事を更新")
@@ -375,6 +437,9 @@ def main(argv: list[str] | None = None) -> int:
     p_update.add_argument("--type", choices=list(CONTENT_TYPES), default="html",
                           dest="type_name")
     p_update.add_argument("--image", action="append", default=[], metavar="FILE")
+    p_update.add_argument("--schedule", metavar="ISO8601", default=None,
+                          help="予約投稿の公開時刻 (ISO 8601、未来の日時)。"
+                               "記事を下書き + 予約状態にする")
 
     p_delete = sub.add_parser("delete", help="記事を削除")
     p_delete.add_argument("entry_id")
@@ -386,6 +451,14 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
+    schedule = getattr(args, "schedule", None)
+    if schedule is not None:
+        try:
+            schedule = parse_schedule_time(schedule)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
@@ -396,10 +469,11 @@ def main(argv: list[str] | None = None) -> int:
         return list_entries(cfg)
     if args.command in ("draft", "post", "posthtml", "postmd"):
         return post_entry(cfg, args.title, args.body_file, args.draft,
-                          args.content_type, args.image)
+                          args.content_type, args.image, schedule=schedule)
     if args.command == "update":
         return update_entry(cfg, args.entry_id, args.title, args.body_file,
-                            CONTENT_TYPES[args.type_name], args.image)
+                            CONTENT_TYPES[args.type_name], args.image,
+                            schedule=schedule)
     if args.command == "delete":
         return delete_entry(cfg, args.entry_id)
     if args.command == "upload":
